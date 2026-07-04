@@ -32,7 +32,7 @@ resource "aws_vpc_security_group_egress_rule" "allow_all_traffic_ipv4" {
 }
 
 
-## Create Multiple EC2 instances  with remote-exec provisioner
+## Create EC2 instances for each component
 
 resource "aws_instance" "instance" {
   for_each = var.components
@@ -44,23 +44,9 @@ resource "aws_instance" "instance" {
   tags = {
     Name = each.key
   }
-  provisioner "remote-exec" {
-    connection {
-      type        = "ssh"
-      user        = "ec2-user"
-      private_key = file("/home/ec2-user/.ssh/aws-helpag.pem")
-      host        = self.public_ip
-    }
-    inline = [
-      "sudo cloud-init status --wait",
-      "for i in 1 2 3 4 5; do sudo dnf install -y nginx git && break || sleep 10; done",
-      "sudo systemctl enable --now nginx",
-      "rm -rf /home/ec2-user/splunk-script",
-      "git clone https://github.com/kiranpanchavati9/splunk-script.git /home/ec2-user/splunk-script",
-      "cd /home/ec2-user/splunk-script && chmod +x splunk.sh && sudo bash splunk.sh"
-    ]
-  }
 }
+
+## Create Route 53 record for each EC2 instance
 
 resource "aws_route53_record" "a-records" {
   for_each = var.components
@@ -71,8 +57,18 @@ resource "aws_route53_record" "a-records" {
   records = [aws_instance.instance[each.key].public_ip]
 }
 
+# Provisioner to run splunk script on each EC2 instance after the EC2 instance is created and the Route 53 record is created. 
+# This is the second step in the pipeline.
 
 resource "null_resource" "splunk_provisioner" {
+
+  depends_on = [aws_instance.instance
+                  ,aws_route53_record.a-records
+                  ,aws_security_group.allow_ports_firewall_roboshop
+                  ,aws_vpc_security_group_ingress_rule.allow_ports_firewall_roboshop
+                  ,aws_vpc_security_group_ingress_rule.allow_all_traffic_ipv4
+                  ,aws_vpc_security_group_egress_rule.allow_all_traffic_ipv4]
+
   for_each = var.components
 
   provisioner "remote-exec" {
